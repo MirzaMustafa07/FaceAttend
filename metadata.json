@@ -1,0 +1,7 @@
+{
+  "name": "Offline Face Recognition Attendance",
+  "description": "An offline-first mobile application for managing class attendance using face recognition. Create classes, add students with photos, and take attendance using your device's camera. All data is stored locally.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
