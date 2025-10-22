@@ -14,8 +14,17 @@ const AttendanceScanner: React.FC<AttendanceScannerProps> = ({ classToScan, setV
   const [attendance, setAttendance] = useState<Map<string, AttendanceRecord>>(new Map(
     classToScan.students.map(s => [s.id, { studentId: s.id, status: 'absent', timestamp: null }])
   ));
-  const [isScanning, setIsScanning] = useState(true);
+  const [isScanning, setIsScanning] = useState(false);
+  const [isCameraReady, setIsCameraReady] = useState(false);
+  const [scanHasBegun, setScanHasBegun] = useState(false);
   const [scanMessage, setScanMessage] = useState("Initializing camera...");
+  const [studentInView, setStudentInView] = useState<Student | null>(null);
+  
+  const attendanceRef = useRef(attendance);
+  useEffect(() => {
+    attendanceRef.current = attendance;
+  }, [attendance]);
+
 
   useEffect(() => {
     let stream: MediaStream | null = null;
@@ -24,12 +33,13 @@ const AttendanceScanner: React.FC<AttendanceScannerProps> = ({ classToScan, setV
         stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
-          setScanMessage("Place face in the center");
+          setScanMessage("Camera ready. Press Start Scanning.");
+          setIsCameraReady(true);
         }
       } catch (err) {
         console.error("Error accessing camera: ", err);
         setScanMessage("Could not access camera. Please check permissions.");
-        setIsScanning(false);
+        setIsCameraReady(false);
       }
     };
     setupCamera();
@@ -51,32 +61,55 @@ const AttendanceScanner: React.FC<AttendanceScannerProps> = ({ classToScan, setV
     });
   }, []);
   
-  // Simulation of face recognition
   useEffect(() => {
-    if (!isScanning) return;
+    if (!isScanning || !isCameraReady) {
+      return; // Stop if not scanning or camera isn't ready
+    }
 
-    const interval = setInterval(() => {
-      const unmarkedStudents = classToScan.students.filter(s => attendance.get(s.id)?.status === 'absent');
-      if (unmarkedStudents.length > 0) {
-        const randomStudent = unmarkedStudents[Math.floor(Math.random() * unmarkedStudents.length)];
-        setScanMessage(`Match found: ${randomStudent.name}`);
-        markAttendance(randomStudent.id, 'present');
-        setTimeout(() => {
-            if (isScanning) {
-              setScanMessage("Searching for next student...");
-            }
-        }, 2000);
-      } else {
+    const scanInterval = setInterval(() => {
+      const currentAttendance = attendanceRef.current;
+      const unmarkedStudents = classToScan.students.filter(s => {
+          const record = currentAttendance.get(s.id);
+          return !record || record.status === 'absent';
+      });
+
+      if (unmarkedStudents.length === 0) {
         setScanMessage("All students accounted for.");
         setIsScanning(false);
+        setStudentInView(null);
+        return;
       }
-    }, 4000);
+      
+      if (studentInView) {
+        const targetStatus = currentAttendance.get(studentInView.id)?.status;
 
-    return () => clearInterval(interval);
-  }, [isScanning, classToScan.students, attendance, markAttendance]);
+        if (targetStatus === 'present') {
+            setScanMessage(`${studentInView.name} marked present. Pause to scan the next student.`);
+            return; // Stay on this message until user pauses.
+        }
+
+        setScanMessage(`Scanning for ${studentInView.name}...`);
+        
+        if (Math.random() < 0.4) { // 40% chance of success
+          setScanMessage(`Match found: ${studentInView.name}`);
+          markAttendance(studentInView.id, 'present');
+        } else {
+          setScanMessage(`Could not confirm identity of ${studentInView.name}. Retrying...`);
+        }
+      } else {
+        setScanMessage("Searching for student...");
+        const nextStudentToScan = unmarkedStudents[Math.floor(Math.random() * unmarkedStudents.length)];
+        setStudentInView(nextStudentToScan);
+      }
+    }, 2500);
+
+    return () => {
+      clearInterval(scanInterval);
+    };
+  }, [isScanning, isCameraReady, classToScan.students, markAttendance, studentInView]);
+
 
   const handleFinish = () => {
-      // FIX: Explicitly type the 'record' parameter to resolve type inference issues.
       const records = Array.from(attendance.values()).map((record: AttendanceRecord) => {
           const student = classToScan.students.find(s => s.id === record.studentId)!;
           return { student, status: record.status, timestamp: record.timestamp };
@@ -92,7 +125,28 @@ const AttendanceScanner: React.FC<AttendanceScannerProps> = ({ classToScan, setV
       };
       saveReport(report);
       setView({name: 'reportList'});
-  }
+  };
+
+  const toggleScanning = () => {
+    if (!isCameraReady) return;
+    if (!scanHasBegun) {
+      setScanHasBegun(true);
+    }
+    
+    setIsScanning(prevIsScanning => {
+      const newIsScanning = !prevIsScanning;
+      if (!newIsScanning) { // If we are pausing
+        setScanMessage("Scanning paused. Resume to find a new student.");
+        setStudentInView(null); // Reset the target student
+      }
+      return newIsScanning;
+    });
+  };
+
+  const getButtonText = () => {
+    if (!scanHasBegun) return 'Start Scanning';
+    return isScanning ? 'Pause Scanning' : 'Resume Scanning';
+  };
 
   return (
     <div className="p-4 min-h-screen bg-slate-900 flex flex-col">
@@ -108,8 +162,12 @@ const AttendanceScanner: React.FC<AttendanceScannerProps> = ({ classToScan, setV
         <div className="absolute inset-0 border-8 border-cyan-500/50 rounded-lg" style={{ clipPath: 'polygon(0% 0%, 0% 100%, 25% 100%, 25% 25%, 75% 25%, 75% 75%, 25% 75%, 25% 100%, 100% 100%, 100% 0%)' }}></div>
         <div className="absolute bottom-4 left-4 right-4 bg-black/50 text-white text-center p-2 rounded-md">{scanMessage}</div>
       </div>
-       <button onClick={() => setIsScanning(prev => !prev)} className={`w-full max-w-lg mx-auto mb-4 py-2 px-4 rounded-md text-white font-semibold transition ${isScanning ? 'bg-orange-500 hover:bg-orange-600' : 'bg-green-500 hover:bg-green-600'}`}>
-        {isScanning ? 'Pause Scanning' : 'Resume Scanning'}
+       <button
+        onClick={toggleScanning}
+        disabled={!isCameraReady}
+        className={`w-full max-w-lg mx-auto mb-4 py-2 px-4 rounded-md text-white font-semibold transition ${isScanning ? 'bg-orange-500 hover:bg-orange-600' : 'bg-green-500 hover:bg-green-600'} disabled:bg-slate-600 disabled:cursor-not-allowed`}
+       >
+        {getButtonText()}
       </button>
 
       <div className="flex-grow overflow-y-auto bg-slate-800 rounded-lg p-4 space-y-2">
